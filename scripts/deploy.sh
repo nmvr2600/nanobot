@@ -57,8 +57,110 @@ nanobot 服务部署脚本
 EOF
 }
 
+# 检测操作系统
+is_macos() {
+    [[ "$(uname)" == "Darwin" ]]
+}
+
+# 检查 launchd 服务状态
+check_launchd_status() {
+    if launchctl list | grep -q "${SERVICE_NAME}"; then
+        local pid
+        pid=$(launchctl list | grep "${SERVICE_NAME}" | awk '{print $1}')
+        if [[ "${pid}" != "-" ]]; then
+            echo "running (pid: ${pid})"
+            return 0
+        else
+            echo "loaded but not running"
+            return 1
+        fi
+    else
+        echo "not loaded"
+        return 2
+    fi
+}
+
+# 检查通用后台进程状态
+check_process_status() {
+    if [[ -f "${PID_FILE}" ]]; then
+        local pid
+        pid=$(cat "${PID_FILE}" 2>/dev/null || true)
+        if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+            echo "running (pid: ${pid})"
+            return 0
+        else
+            echo "pid file exists but process not running"
+            return 1
+        fi
+    else
+        echo "not running"
+        return 2
+    fi
+}
+
+# status 命令
+cmd_status() {
+    log_info "检查 nanobot 服务状态..."
+
+    local launchd_code=2
+    local proc_code=2
+
+    if is_macos; then
+        log_info "检测到 macOS 系统"
+        local launchd_status
+        # 禁用 set -e 以捕获退出码
+        set +e
+        launchd_status=$(check_launchd_status)
+        launchd_code=$?
+        set -e
+
+        echo "  launchd 服务: ${launchd_status}"
+
+        if [[ -f "${LAUNCH_AGENTS_DIR}/${SERVICE_NAME}.plist" ]]; then
+            echo "  plist 文件: 已安装"
+        else
+            echo "  plist 文件: 未安装"
+        fi
+    fi
+
+    # 检查通用进程状态
+    local proc_status
+    set +e
+    proc_status=$(check_process_status)
+    proc_code=$?
+    set -e
+
+    echo "  后台进程: ${proc_status}"
+
+    # 检查日志文件
+    if [[ -d "${LOG_DIR}" ]]; then
+        local log_count
+        log_count=$(ls -1 "${LOG_DIR}"/*.log 2>/dev/null | wc -l | tr -d ' ')
+        echo "  日志目录: ${LOG_DIR} (${log_count} 个日志文件)"
+    else
+        echo "  日志目录: 不存在"
+    fi
+
+    # 检查可执行文件
+    if command -v nanobot &>/dev/null; then
+        local nanobot_path
+        nanobot_path=$(command -v nanobot)
+        echo "  可执行文件: ${nanobot_path}"
+    else
+        echo "  可执行文件: 未找到"
+    fi
+
+    # 总体状态
+    if [[ ${launchd_code:-2} -eq 0 ]] || [[ ${proc_code:-2} -eq 0 ]]; then
+        log_success "服务正在运行"
+        return 0
+    else
+        log_warning "服务未运行"
+        return 1
+    fi
+}
+
 # 命令函数占位符（后续实现）
-cmd_status() { log_info "status 命令待实现"; }
 cmd_update() { log_info "update 命令待实现"; }
 cmd_install() { log_info "install 命令待实现"; }
 cmd_start() { log_info "start 命令待实现"; }
