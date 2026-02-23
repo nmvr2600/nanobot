@@ -21,93 +21,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 获取完整历史
-          persist-credentials: false  # 稍后使用 token 推送
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 配置 Git 用户
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # 禁用 Git 凭据助手，避免认证问题
+          git config --global --unset credential.helper || true
 
-      - name: 添加上游仓库
-        run: |
-          # 添加上游仓库，如果已存在则更新 URL
-          if git remote | grep -q upstream; then
-            git remote set-url upstream https://github.com/nanobot-io/nanobot.git
-          else
-            git remote add upstream https://github.com/nanobot-io/nanobot.git
-          fi
-          git fetch upstream --tags
-
-      - name: 检查上游变更
-        id: check-changes
-        run: |
-          # 检查是否有新的提交
-          git checkout main
-          LOCAL=$(git rev-parse HEAD)
-          UPSTREAM=$(git rev-parse upstream/main)
-
-          if [ "$LOCAL" = "$UPSTREAM" ]; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "当前仓库已经是最新的，无需同步"
-          else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "发现上游变更，准备同步"
-            echo "本地提交: $LOCAL"
-            echo "上游提交: $UPSTREAM"
-          fi
-
-      - name: 合并上游变更
-        if: steps.check-changes.outputs.has_changes == 'true'
-        run: |
-          # 尝试快进合并
-          git merge upstream/main --ff-only || {
-            # 如果快进失败，尝试普通合并
-            echo "快进合并失败，尝试普通合并..."
-            git merge upstream/main --no-edit || {
-              # 如果合并失败，创建 PR
-              echo "合并冲突，将创建 Pull Request"
-              echo "create_pr=true" >> $GITHUB_ENV
-              exit 0
-            }
-          }
-
-      - name: 推送到当前仓库
-        if: steps.check-changes.outputs.has_changes == 'true' && env.create_pr != 'true'
-        uses: ad-m/github-push-action@master
+      - name: 同步上游仓库
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.1
         with:
+          upstream_repository: nanobot-io/nanobot
+          upstream_branch: main
+          target_branch: main
+          git_push_args: --force-with-lease
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: main
-          tags: true
-
-      - name: 创建同步分支
-        if: env.create_pr == 'true'
-        run: |
-          # 创建一个分支用于 PR
-          BRANCH_NAME="sync-upstream-$(date +%Y%m%d-%H%M%S)"
-          git checkout -b "$BRANCH_NAME"
-          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "$BRANCH_NAME"
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
-
-      - name: 创建 Pull Request
-        if: env.create_pr == 'true'
-        uses: repo-sync/pull-request@v2
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          source_branch: ${{ env.branch_name }}
-          destination_branch: main
-          pr_title: "同步上游仓库变更"
-          pr_body: |
-            ## 同步上游变更
-
-            此 PR 包含来自上游仓库 nanobot-io/nanobot 的最新变更。
-
-            由于存在合并冲突，需要手动解决。
-
-            **操作步骤：**
-            1. 拉取此分支到本地
-            2. 解决合并冲突
-            3. 提交更改
-            4. 合并 PR
-
-            *此 PR 由 GitHub Action 自动创建。*
-          pr_label: "sync,upstream,automated"
+          git_username: github-actions[bot]
+          git_email: github-actions[bot]@users.noreply.github.com
